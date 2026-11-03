@@ -1,7 +1,7 @@
 import fs from "fs";
 import type { BrowserContext, Page } from "playwright";
 import type { AdapterContext, ModelDef, ProviderAdapter } from "./types";
-import { clickAny, debugShot, fillAny, firstVisible } from "./pw";
+import { absolutize, clickAny, clickIfPresent, debugShot, fillAny, firstVisible } from "./pw";
 import { log } from "../logger";
 import { extractCode, extractLink, type TempMailSession } from "../tempmail";
 
@@ -25,8 +25,21 @@ const SELECTORS = {
     "a[href*='signup']",
     "a[href*='register']",
   ],
-  emailInput: ["input[type='email']", "input[name='email']", "input[placeholder*='mail' i]"],
-  passwordInput: ["input[type='password']", "input[name='password']", "input[placeholder*='pass' i]"],
+  emailInput: [
+    "input[type='email']",
+    "input[name*='email' i]",
+    "input[autocomplete='email']",
+    "input[placeholder*='mail' i]",
+    "input[placeholder*='почт' i]",
+    "[data-testid='email-input']",
+    "#email",
+  ],
+  passwordInput: [
+    "input[type='password']",
+    "input[name*='pass' i]",
+    "input[placeholder*='pass' i]",
+    "[data-testid='password-input']",
+  ],
   submitAuth: [
     "button[type='submit']",
     "button:has-text('Sign up')",
@@ -178,7 +191,8 @@ export const polyface: ProviderAdapter = {
     log.debug("polyface: логинюсь по паролю");
     await loggedOut.click();
     await page.waitForTimeout(800);
-    await fillAny(page, SELECTORS.emailInput, account.email, "поле email", 8000);
+    await clickIfPresent(page, ["button:has-text('Log in with email')", "button:has-text('Email')"], 2000);
+    await fillAny(page, SELECTORS.emailInput, account.email, "поле email", 10_000);
     await fillAny(page, SELECTORS.passwordInput, account.password, "поле пароля", 5000);
     await clickAny(page, SELECTORS.submitAuth, "кнопка входа", 5000);
 
@@ -245,27 +259,29 @@ export const polyface: ProviderAdapter = {
 
     while (Date.now() < deadline) {
       for (const sel of SELECTORS.resultVideo) {
-        const src = await page
+        const raw = await page
           .locator(sel)
           .first()
           .getAttribute("src")
           .catch(() => null);
-        if (src && /^https?:/.test(src) && !/placeholder|blank/i.test(src)) return { url: src };
+        const src = absolutize(raw, page.url());
+        if (src && !/placeholder|blank/i.test(src)) return { url: src };
       }
 
       for (const sel of SELECTORS.resultImage) {
-        const src = await page
+        const raw = await page
           .locator(sel)
           .first()
           .getAttribute("src")
           .catch(() => null);
-        if (src && /^https?:/.test(src) && !/avatar|logo|icon/i.test(src)) return { url: src };
+        const src = absolutize(raw, page.url());
+        if (src && !/avatar|logo|icon/i.test(src)) return { url: src };
       }
 
       const dl = await firstVisible(page, SELECTORS.downloadBtn, 500);
       if (dl) {
-        const href = await dl.getAttribute("href").catch(() => null);
-        if (href && /^https?:/.test(href)) return { url: href };
+        const href = absolutize(await dl.getAttribute("href").catch(() => null), page.url());
+        if (href) return { url: href };
       }
 
       const body = await page.locator("body").innerText().catch(() => "");
@@ -282,7 +298,7 @@ export const polyface: ProviderAdapter = {
   },
 };
 
-/** Полная регистрация: адрес и письма — с temp-mail.org. */
+/** Полная регистрация: адрес и письма — с temp-mail.io. */
 export async function registerPolyWithMail(
   context: BrowserContext,
   email: string,
@@ -304,7 +320,19 @@ export async function registerPolyWithMail(
       await page.waitForTimeout(800);
     }
 
-    await fillAny(page, SELECTORS.emailInput, email, "поле email", 10_000);
+    // провайдер может сначала предлагать вход через Google/Email — открываем email-вариант
+    await clickIfPresent(
+      page,
+      [
+        "button:has-text('Sign up with email')",
+        "button:has-text('Continue with email')",
+        "button:has-text('Log in with email')",
+        "button:has-text('Email')",
+      ],
+      2500
+    );
+
+    await fillAny(page, SELECTORS.emailInput, email, "поле email", 12_000);
     await fillAny(page, SELECTORS.passwordInput, password, "поле пароля", 5000);
     await clickAny(page, SELECTORS.submitAuth, "кнопка регистрации", 5000);
 

@@ -1,7 +1,7 @@
 import type { Generation, StageName } from "../types";
 import { STAGE_LABELS } from "../types";
 
-const ORDER: StageName[] = ["account", "auth", "submit", "processing", "done"];
+const ORDER: StageName[] = ["queued", "account", "auth", "submit", "processing", "done"];
 
 interface Props {
   generation: Generation;

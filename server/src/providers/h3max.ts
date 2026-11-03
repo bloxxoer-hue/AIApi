@@ -1,7 +1,7 @@
 import fs from "fs";
 import type { BrowserContext, Page } from "playwright";
 import type { AdapterContext, ModelDef, ProviderAdapter } from "./types";
-import { clickAny, debugShot, fillAny, firstVisible, LayoutError } from "./pw";
+import { absolutize, clickAny, clickIfPresent, debugShot, fillAny, firstVisible, LayoutError } from "./pw";
 import { log } from "../logger";
 import { extractCode, extractLink, type TempMailSession } from "../tempmail";
 
@@ -32,13 +32,18 @@ const SELECTORS = {
   ],
   emailInput: [
     "input[type='email']",
-    "input[name='email']",
+    "input[name*='email' i]",
+    "input[autocomplete='email']",
     "input[placeholder*='mail' i]",
+    "input[placeholder*='почт' i]",
+    "[data-testid='email-input']",
+    "#email",
   ],
   passwordInput: [
     "input[type='password']",
-    "input[name='password']",
+    "input[name*='pass' i]",
     "input[placeholder*='pass' i]",
+    "[data-testid='password-input']",
   ],
   submitAuth: [
     "button[type='submit']",
@@ -232,7 +237,8 @@ export const h3max: ProviderAdapter = {
     log.debug("h3max: сессия истекла, логинюсь по паролю");
     await loggedOut.click();
     await page.waitForTimeout(800);
-    await fillAny(page, SELECTORS.emailInput, account.email, "поле email", 8000);
+    await clickIfPresent(page, ["button:has-text('Log in with email')", "button:has-text('Email')"], 2000);
+    await fillAny(page, SELECTORS.emailInput, account.email, "поле email", 10_000);
     await fillAny(page, SELECTORS.passwordInput, account.password, "поле пароля", 5000);
     await clickAny(page, SELECTORS.submitAuth, "кнопка входа", 5000);
 
@@ -334,33 +340,31 @@ export const h3max: ProviderAdapter = {
     while (Date.now() < deadline) {
       // видео
       for (const sel of SELECTORS.resultVideo) {
-        const src = await page
+        const raw = await page
           .locator(sel)
           .first()
           .getAttribute("src")
           .catch(() => null);
-        if (src && /^https?:/.test(src) && !src.includes("placeholder")) {
-          return { url: src };
-        }
+        const src = absolutize(raw, page.url());
+        if (src && !src.includes("placeholder")) return { url: src };
       }
 
       // картинка
       for (const sel of SELECTORS.resultImage) {
-        const src = await page
+        const raw = await page
           .locator(sel)
           .first()
           .getAttribute("src")
           .catch(() => null);
-        if (src && /^https?:/.test(src) && !/avatar|logo|icon/i.test(src)) {
-          return { url: src };
-        }
+        const src = absolutize(raw, page.url());
+        if (src && !/avatar|logo|icon/i.test(src)) return { url: src };
       }
 
       // кнопка скачивания с прямой ссылкой
       const dl = await firstVisible(page, SELECTORS.downloadBtn, 500);
       if (dl) {
-        const href = await dl.getAttribute("href").catch(() => null);
-        if (href && /^https?:/.test(href)) return { url: href };
+        const href = absolutize(await dl.getAttribute("href").catch(() => null), page.url());
+        if (href) return { url: href };
       }
 
       // ошибка на стороне провайдера
@@ -378,7 +382,7 @@ export const h3max: ProviderAdapter = {
   },
 };
 
-/** Полная регистрация: адрес берём из temp-mail.org, письмо ждём там же. */
+/** Полная регистрация: адрес берём из temp-mail.io, письмо ждём там же. */
 export async function registerH3WithMail(
   context: BrowserContext,
   email: string,
@@ -400,11 +404,23 @@ export async function registerH3WithMail(
       await page.waitForTimeout(800);
     }
 
-    await fillAny(page, SELECTORS.emailInput, email, "поле email", 10_000);
+    // часть провайдеров сначала показывает «войти через Google/Email» — открываем email-вариант
+    await clickIfPresent(
+      page,
+      [
+        "button:has-text('Sign up with email')",
+        "button:has-text('Continue with email')",
+        "button:has-text('Log in with email')",
+        "button:has-text('Email')",
+      ],
+      2500
+    );
+
+    await fillAny(page, SELECTORS.emailInput, email, "поле email", 12_000);
     await fillAny(page, SELECTORS.passwordInput, password, "поле пароля", 5000);
     await clickAny(page, SELECTORS.submitAuth, "кнопка регистрации", 5000);
 
-    // ждём письмо на temp-mail.org и вводим код / переходим по ссылке
+    // ждём письмо на temp-mail.io и вводим код / переходим по ссылке
     const message = await mail.waitForMessage(150);
     const code = extractCode(message);
     const link = extractLink(message);

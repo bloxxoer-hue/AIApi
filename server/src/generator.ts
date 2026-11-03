@@ -44,7 +44,20 @@ function stageSetter(id: string): (stage: StageName, progress?: number) => void 
   };
 }
 
-/** Шаг 1: достать/создать аккаунт провайдера. Почта — напрямую с temp-mail.org. */
+/**
+ * Двигает прогресс во время долгих «немых» шагов (регистрация, ожидание письма) —
+ * без него UI висит на одном проценте и выглядит как зависание.
+ */
+function heartbeat(id: string, from: number, to: number, stepMs = 5000): () => void {
+  let current = from;
+  const timer = setInterval(() => {
+    current = Math.min(to, current + 1); // +1 каждые 5с: 10→30 ≈ 100 сек — как раз долгая регистрация
+    store.updateGeneration(id, { progress: current });
+  }, stepMs);
+  return () => clearInterval(timer);
+}
+
+/** Шаг 1: достать/создать аккаунт провайдера. Почта — напрямую с temp-mail.io. */
 async function ensureAccount(adapterId: string): Promise<number> {
   const existing = store.getActiveAccount(adapterId);
   if (existing) {
@@ -66,7 +79,7 @@ async function ensureAccount(adapterId: string): Promise<number> {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     });
 
-    // временный ящик: открываем temp-mail.org и забираем адрес со страницы
+    // временный ящик: открываем temp-mail.io и забираем адрес со страницы
     mail = await TempMailSession.create(browser);
     log.info(`register: ${adapterId} → ${mail.address}`);
 
@@ -94,7 +107,9 @@ async function runGeneration(row: GenerationRow, attempt: number): Promise<void>
   const { model, adapter } = found;
 
   stage("account", 10);
-  const accountId = await ensureAccount(adapter.id);
+  // регистрация + почта идут долго и молча — подвигать проценты, чтобы UI не висел
+  const stopHeartbeat = heartbeat(row.id, 10, 30);
+  const accountId = await ensureAccount(adapter.id).finally(() => stopHeartbeat());
   const accountRow = store.getActiveAccount(adapter.id)!;
   store.updateGeneration(row.id, { account_id: accountId, attempts: attempt });
 
@@ -171,7 +186,15 @@ async function runGeneration(row: GenerationRow, attempt: number): Promise<void>
 
 /** Скачивание результата в DATA_DIR/results — потоком, без буфера в RAM. */
 async function downloadResult(url: string, id: string): Promise<string> {
-  const res = await fetch(url, { redirect: "follow" });
+  const res = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      // CDN провайдеров отдаёт файлы не безличным ботам
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      Accept: "*/*",
+    },
+  });
   if (!res.ok || !res.body) throw new Error(`Скачивание результата не удалось: HTTP ${res.status}`);
 
   const contentType = res.headers.get("content-type") ?? "";
@@ -211,7 +234,8 @@ export function enqueueGeneration(id: string): void {
           delayMs: 5000,
           onRetry: (attempt, err) => {
             log.warn(`gen ${id}: попытка ${attempt} не вышла, ретрай…`, err instanceof Error ? err.message : err);
-            store.updateGeneration(id, { stage: "processing", status: "running" });
+            // стадию не трогаем — она останется той же, но статус снова «в работе»
+            store.updateGeneration(id, { status: "running" });
           },
         }
       );

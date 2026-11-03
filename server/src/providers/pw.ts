@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { Frame, Locator, Page } from "playwright";
 import { log } from "../logger";
 
 /**
@@ -6,16 +6,27 @@ import { log } from "../logger";
  * Каждый селектор ищется по списку-фоллбэку, первый видимый — побеждает.
  */
 
-/** Первый селектор, который реально виден на странице. */
+/** Кадры страницы: главный + все iframe (авторизация часто живёт в iframe/модалке). */
+function allFrames(page: Page): Frame[] {
+  try {
+    return page.frames();
+  } catch {
+    return [];
+  }
+}
+
+/** Первый селектор, который реально виден — ищем по всем фреймам. */
 export async function firstVisible(page: Page, selectors: string[], timeoutMs = 8000): Promise<Locator | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    for (const sel of selectors) {
-      const loc = page.locator(sel).first();
-      try {
-        if (await loc.isVisible({ timeout: 300 })) return loc;
-      } catch {
-        // элемент исчез между проверками — ок, идём дальше
+    for (const frame of allFrames(page)) {
+      for (const sel of selectors) {
+        try {
+          const loc = frame.locator(sel).first();
+          if (await loc.isVisible({ timeout: 200 })) return loc;
+        } catch {
+          // элемент/кадр исчез между проверками — ок, идём дальше
+        }
       }
     }
     await page.waitForTimeout(250);
@@ -23,11 +34,25 @@ export async function firstVisible(page: Page, selectors: string[], timeoutMs = 
   return null;
 }
 
-/** Первый селектор, который существует (даже скрытый). */
-export async function firstExisting(page: Page, selectors: string[]): Promise<Locator | null> {
-  for (const sel of selectors) {
-    const loc = page.locator(sel).first();
-    if ((await loc.count()) > 0) return loc;
+/** Клик, если элемент есть. Не ошибка, если нет — просто пропускаем шаг. */
+export async function clickIfPresent(page: Page, selectors: string[], timeoutMs = 2500): Promise<boolean> {
+  const loc = await firstVisible(page, selectors, timeoutMs);
+  if (!loc) return false;
+  await loc.click({ timeout: 3000 }).catch(() => undefined);
+  return true;
+}
+
+/** Относительный src («/files/x.mp4») → абсолютный URL, иначе скачивание упадёт. */
+export function absolutize(src: string | null, base: string): string | null {
+  if (!src) return null;
+  if (src.startsWith("//")) return `https:${src}`;
+  if (/^https?:\/\//.test(src)) return src;
+  if (src.startsWith("/")) {
+    try {
+      return new URL(src, base).toString();
+    } catch {
+      return null;
+    }
   }
   return null;
 }

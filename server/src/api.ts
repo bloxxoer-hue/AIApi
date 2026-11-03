@@ -1,6 +1,5 @@
 import path from "path";
 import express, { type Request, type Response } from "express";
-import { config } from "./config";
 import { log } from "./logger";
 import { store, type GenerationRow } from "./db";
 import { allModels, findModel } from "./providers";
@@ -23,8 +22,8 @@ function publicView(row: GenerationRow) {
     error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    // ссылка на файл появляется только когда всё готово
-    url: row.status === "done" && row.result_path ? `${config.baseUrl}/api/results/${row.id}` : null,
+    // относительная ссылка — работает в любом окружении без BASE_URL
+    url: row.status === "done" && row.result_path ? `/api/results/${row.id}` : null,
     params: {
       duration: params.duration,
       resolution: params.resolution,
