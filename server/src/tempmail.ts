@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Page } from "playwright";
-import { log } from "../logger";
-import { firstVisible } from "../providers/pw";
+import { log } from "./logger";
+import { firstVisible } from "./providers/pw";
 
 /**
  * Временная почта — напрямую через сайт https://temp-mail.org/, без API.
@@ -90,7 +90,7 @@ export class TempMailSession {
       const loc = await firstVisible(page, ADDRESS_SELECTORS, 1500);
       if (loc) {
         const raw = await loc
-          .evaluate((el) => {
+          .evaluate((el: Element) => {
             const node = el as HTMLInputElement;
             return (node.value || node.textContent || node.innerText || "").trim();
           })
