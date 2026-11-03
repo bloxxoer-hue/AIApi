@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: unigen
+    runtime: docker
+    plan: starter          # Chromium + Playwright требуют ~2 ГБ RAM
+    healthCheckPath: /health
+    disk:
+      name: unigen-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: DATA_DIR
+        value: /var/data
+      - key: CONCURRENCY
+        value: "2"
+      - key: LOG_LEVEL
+        value: info
+      # BASE_URL подставляется автоматически Render'ом (https://<service>.onrender.com)
+      - key: BASE_URL
+        sync: false
