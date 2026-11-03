@@ -24,6 +24,9 @@ const ADDRESS_SELECTORS = [
   "#email",
   "input[name='email']",
   "input[readonly][type='email']",
+  "input[readonly]",
+  "input[placeholder*='mail' i]",
+  "#copymail",
   ".email-address",
   "#email_ch",
   "[data-address]",
@@ -67,24 +70,62 @@ export class TempMailSession {
     });
     const page = await context.newPage();
 
-    await page.goto(HOME, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    // закрываем всплывашки, если они есть (cookie/реклама)
-    await page
-      .locator(
-        "button:has-text('Accept'), button:has-text('Согласен'), button:has-text('OK'), button:has-text('Got it'), .modal button.close"
-      )
-      .first()
-      .click({ timeout: 3000 })
-      .catch(() => undefined);
+    // прячем признаки автотеста — иначе сайт роботу отдаёт капчу вместо адреса
+    await page.addInitScript(() => {
+      try {
+        Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+        Object.defineProperty(navigator, "languages", { get: () => ["ru-RU", "ru", "en-US", "en"] });
+        Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+      } catch {
+        /* ignore */
+      }
+    });
 
-    const address = await TempMailSession.readAddress(page);
+    const deadline = Date.now() + 90_000;
+    let address = "";
+    let lastInfo = "страница не открывалась";
+
+    // несколько заходов: первый может упереться в челленж, второй — пройти
+    while (Date.now() < deadline && !address) {
+      await page.goto(HOME, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch((err: Error) => {
+        lastInfo = `goto failed: ${err.message.slice(0, 80)}`;
+      });
+      await page.waitForTimeout(4000);
+
+      // закрываем всплывашки (cookie/реклама), если они есть
+      await page
+        .locator(
+          "button:has-text('Accept'), button:has-text('Согласен'), button:has-text('OK'), button:has-text('Got it'), .modal button.close"
+        )
+        .first()
+        .click({ timeout: 2000 })
+        .catch(() => undefined);
+
+      address = await TempMailSession.readAddress(page, 12_000);
+
+      if (!address) {
+        const title = await page.title().catch(() => "");
+        const body = await page.locator("body").innerText().catch(() => "");
+        const compact = body.replace(/\s+/g, " ").trim();
+        lastInfo = `${title || "без заголовка"} → ${compact.slice(0, 200)}`;
+        log.warn(`temp-mail.org: адрес пока не виден, повтор через 6с (${lastInfo})`);
+        await page.waitForTimeout(6000);
+      }
+    }
+
+    if (!address) {
+      throw new Error(
+        `temp-mail.org: не удалось получить временный адрес за 90 секунд. Что на странице: ${lastInfo}`
+      );
+    }
+
     log.debug(`temp-mail.org: адрес ${address}`);
     return new TempMailSession(page, context, address);
   }
 
   /** Читает адрес со страницы: сначала поле, потом фоллбэк — любой @ в тексте. */
-  private static async readAddress(page: Page): Promise<string> {
-    const deadline = Date.now() + 60_000;
+  private static async readAddress(page: Page, windowMs: number): Promise<string> {
+    const deadline = Date.now() + windowMs;
 
     while (Date.now() < deadline) {
       const loc = await firstVisible(page, ADDRESS_SELECTORS, 1500);
@@ -104,10 +145,10 @@ export class TempMailSession {
       const match = body.match(/\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b/i);
       if (match && !/example\.com|noreply|test@/i.test(match[0])) return match[0];
 
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1200);
     }
 
-    throw new Error("temp-mail.org: не удалось получить временный адрес (страница не загрузилась)");
+    return ""; // вызывающий сам решит, ретраить или падать
   }
 
   /**

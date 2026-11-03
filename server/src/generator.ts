@@ -30,6 +30,8 @@ async function launchBrowser(): Promise<Browser> {
       "--disable-gpu",
       "--disable-extensions",
       "--disable-background-networking",
+      // убираем отметку webdriver — сайты по ней режут хедлес
+      "--disable-blink-features=AutomationControlled",
       "--lang=ru-RU",
     ],
   });
