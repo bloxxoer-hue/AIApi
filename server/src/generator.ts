@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { createWriteStream } from "fs";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 import { randomUUID } from "crypto";
 import { chromium, type BrowserContext, type Browser } from "playwright";
 import { config } from "./config";
@@ -14,25 +17,22 @@ import { registerPolyWithMail } from "./providers/polyface";
 
 const queue = new Queue(config.concurrency);
 
-let browserPromise: Promise<Browser> | null = null;
-
-/** Один браузер на процесс, контексты — per generation (свежая storage state). */
-function getBrowser(): Promise<Browser> {
-  if (!browserPromise) {
-    browserPromise = chromium.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--lang=ru-RU",
-      ],
-    });
-    browserPromise.catch(() => {
-      browserPromise = null; // даём перезапуститься после падения
-    });
-  }
-  return browserPromise;
+/**
+ * Свежий браузер на каждую генерацию: закрыли → память отдаётся системе сразу.
+ * Общий на процесс браузер держит RSS растущим, а на 512 МБ это критично.
+ */
+async function launchBrowser(): Promise<Browser> {
+  return chromium.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--lang=ru-RU",
+    ],
+  });
 }
 
 function stageSetter(id: string): (stage: StageName, progress?: number) => void {
@@ -54,7 +54,7 @@ async function ensureAccount(adapterId: string, email: string | null, password: 
   const box = email && password ? { address: email, password, token: "" } : await createMailbox();
   log.info(`register: ${adapterId} → ${box.address}`);
 
-  const browser = await getBrowser();
+  const browser = await launchBrowser();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     locale: "ru-RU",
@@ -73,6 +73,7 @@ async function ensureAccount(adapterId: string, email: string | null, password: 
     await context.storageState({ path: storagePath });
   } finally {
     await context.close();
+    await browser.close();
   }
 
   return store.createAccount(adapterId, box.address, box.password, storagePath);
@@ -91,13 +92,21 @@ async function runGeneration(row: GenerationRow, attempt: number): Promise<void>
   const accountRow = store.getActiveAccount(adapter.id)!;
   store.updateGeneration(row.id, { account_id: accountId, attempts: attempt });
 
-  const browser = await getBrowser();
+  const browser = await launchBrowser();
   const context: BrowserContext = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     locale: "ru-RU",
     ...(accountRow.storage_path && fs.existsSync(accountRow.storage_path)
       ? { storageState: accountRow.storage_path }
       : {}),
+  });
+
+  // экономия памяти: шрифты и медиа-превью в браузере не грузим —
+  // результат мы читаем по атрибутам src, а скачиваем сами напрямую
+  await context.route("**/*", (route) => {
+    const type = route.request().resourceType();
+    if (type === "media" || type === "font") return route.abort();
+    return route.continue();
   });
 
   const page = await context.newPage();
@@ -150,13 +159,14 @@ async function runGeneration(row: GenerationRow, attempt: number): Promise<void>
   } finally {
     await page.close().catch(() => undefined);
     await context.close().catch(() => undefined);
+    await browser.close().catch(() => undefined); // RSS падает сразу после закрытия
   }
 }
 
-/** Скачивание результата в DATA_DIR/results. */
+/** Скачивание результата в DATA_DIR/results — потоком, без буфера в RAM. */
 async function downloadResult(url: string, id: string): Promise<string> {
   const res = await fetch(url, { redirect: "follow" });
-  if (!res.ok) throw new Error(`Скачивание результата не удалось: HTTP ${res.status}`);
+  if (!res.ok || !res.body) throw new Error(`Скачивание результата не удалось: HTTP ${res.status}`);
 
   const contentType = res.headers.get("content-type") ?? "";
   const ext = contentType.includes("video")
@@ -168,9 +178,11 @@ async function downloadResult(url: string, id: string): Promise<string> {
         : "jpg";
 
   const filePath = path.join(config.resultsDir, `${id}.${ext}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(filePath, buf);
-  log.debug(`download: ${id}.${ext} ${buf.length} bytes`);
+  const nodeStream = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]);
+  await pipeline(nodeStream, createWriteStream(filePath));
+
+  const size = fs.statSync(filePath).size;
+  log.debug(`download: ${id}.${ext} ${size} bytes`);
   return filePath;
 }
 

@@ -28,8 +28,8 @@ export const config = {
   /** Публичный адрес сервиса — для ссылок на скачивание. */
   baseUrl: (env.BASE_URL || `http://localhost:${int("PORT", 3000)}`).replace(/\/$/, ""),
 
-  /** Сколько генераций крутим одновременно (Playwright жрёт RAM). */
-  concurrency: Math.min(Math.max(int("CONCURRENCY", 2), 1), 4),
+  /** Сколько генераций крутим одновременно (512 МБ — только 1, память бережём). */
+  concurrency: Math.min(Math.max(int("CONCURRENCY", 1), 1), 2),
 
   logLevel: (env.LOG_LEVEL || "info") as "debug" | "info" | "warn" | "error",
 
