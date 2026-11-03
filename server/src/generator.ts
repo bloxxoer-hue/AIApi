@@ -11,7 +11,7 @@ import { store, type GenerationRow } from "./db";
 import { Queue, withRetry } from "./queue";
 import { findModel, getAdapter } from "./providers";
 import type { AdapterContext, GenParams, StageName } from "./providers/types";
-import { createMailbox } from "./tempmail";
+import { randomPassword, TempMailSession } from "./tempmail";
 import { registerH3WithMail } from "./providers/h3max";
 import { registerPolyWithMail } from "./providers/polyface";
 
@@ -42,41 +42,45 @@ function stageSetter(id: string): (stage: StageName, progress?: number) => void 
   };
 }
 
-/** Шаг 1: достать/создать аккаунт провайдера. */
-async function ensureAccount(adapterId: string, email: string | null, password: string | null): Promise<number> {
+/** Шаг 1: достать/создать аккаунт провайдера. Почта — напрямую с temp-mail.org. */
+async function ensureAccount(adapterId: string): Promise<number> {
   const existing = store.getActiveAccount(adapterId);
   if (existing) {
     store.touchAccount(existing.id);
     return existing.id;
   }
 
-  // новый ящик + регистрация на стороне провайдера
-  const box = email && password ? { address: email, password, token: "" } : await createMailbox();
-  log.info(`register: ${adapterId} → ${box.address}`);
+  const password = randomPassword();
+  const storagePath = path.join(config.sessionsDir, `${adapterId}-${Date.now()}.json`);
 
   const browser = await launchBrowser();
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    locale: "ru-RU",
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  });
-
-  const storagePath = path.join(config.sessionsDir, `${adapterId}-${Date.now()}.json`);
+  let mail: TempMailSession | null = null;
+  let context: BrowserContext | null = null;
   try {
-    if (adapterId === "h3max") {
-      await registerH3WithMail(context, box.address, box.password, box.token);
-    } else {
-      const { registerPolyWithMail } = await import("./providers/polyface");
-      await registerPolyWithMail(context, box.address, box.password, box.token);
-    }
-    await context.storageState({ path: storagePath });
-  } finally {
-    await context.close();
-    await browser.close();
-  }
+    context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      locale: "ru-RU",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    });
 
-  return store.createAccount(adapterId, box.address, box.password, storagePath);
+    // временный ящик: открываем temp-mail.org и забираем адрес со страницы
+    mail = await TempMailSession.create(browser);
+    log.info(`register: ${adapterId} → ${mail.address}`);
+
+    if (adapterId === "h3max") {
+      await registerH3WithMail(context, mail.address, password, mail);
+    } else {
+      await registerPolyWithMail(context, mail.address, password, mail);
+    }
+
+    await context.storageState({ path: storagePath });
+    return store.createAccount(adapterId, mail.address, password, storagePath);
+  } finally {
+    await mail?.close().catch(() => undefined);
+    await context?.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
+  }
 }
 
 /** Шаг 2–5: авторизация → форма → поллинг → скачивание. */
@@ -88,7 +92,7 @@ async function runGeneration(row: GenerationRow, attempt: number): Promise<void>
   const { model, adapter } = found;
 
   stage("account", 10);
-  const accountId = await ensureAccount(adapter.id, null, null);
+  const accountId = await ensureAccount(adapter.id);
   const accountRow = store.getActiveAccount(adapter.id)!;
   store.updateGeneration(row.id, { account_id: accountId, attempts: attempt });
 

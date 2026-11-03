@@ -3,7 +3,7 @@ import type { BrowserContext, Page } from "playwright";
 import type { AdapterContext, ModelDef, ProviderAdapter } from "./types";
 import { clickAny, debugShot, fillAny, firstVisible, LayoutError } from "./pw";
 import { log } from "../logger";
-import { createMailbox, extractCode, extractLink, waitForMessage } from "../tempmail";
+import { extractCode, extractLink, type TempMailSession } from "../tempmail";
 
 /**
  * Адаптер h3-max.me — MiniMax h3 (видео) + фото-режимы.
@@ -209,11 +209,7 @@ export const h3max: ProviderAdapter = {
       await fillAny(page, SELECTORS.emailInput, email, "поле email", 10_000);
       await fillAny(page, SELECTORS.passwordInput, password, "поле пароля", 5000);
       await clickAny(page, SELECTORS.submitAuth, "кнопка регистрации", 5000);
-      log.debug("h3max: форма регистрации отправлена, жду письмо");
-
-      // письмо с кодом подтверждения
-      const mailbox = (page as unknown as { __mailboxToken?: string }).__mailboxToken;
-      void mailbox; // токен передаётся снаружи через registerWithMail
+      log.debug("h3max: форма регистрации отправлена");
 
       await page.waitForTimeout(3000);
       await debugShot(page, "h3max-after-signup");
@@ -382,12 +378,12 @@ export const h3max: ProviderAdapter = {
   },
 };
 
-/** Полная регистрация с получением письма и подтверждением. */
+/** Полная регистрация: адрес берём из temp-mail.org, письмо ждём там же. */
 export async function registerH3WithMail(
   context: BrowserContext,
   email: string,
   password: string,
-  mailboxToken: string
+  mail: TempMailSession
 ): Promise<void> {
   const page = await context.newPage();
   try {
@@ -408,8 +404,8 @@ export async function registerH3WithMail(
     await fillAny(page, SELECTORS.passwordInput, password, "поле пароля", 5000);
     await clickAny(page, SELECTORS.submitAuth, "кнопка регистрации", 5000);
 
-    // ждём письмо и вводим код / переходим по ссылке
-    const message = await waitForMessage(mailboxToken, 90);
+    // ждём письмо на temp-mail.org и вводим код / переходим по ссылке
+    const message = await mail.waitForMessage(150);
     const code = extractCode(message);
     const link = extractLink(message);
 

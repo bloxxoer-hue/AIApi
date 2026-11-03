@@ -3,7 +3,7 @@ import type { BrowserContext, Page } from "playwright";
 import type { AdapterContext, ModelDef, ProviderAdapter } from "./types";
 import { clickAny, debugShot, fillAny, firstVisible } from "./pw";
 import { log } from "../logger";
-import { extractCode, extractLink, waitForMessage } from "../tempmail";
+import { extractCode, extractLink, type TempMailSession } from "../tempmail";
 
 /**
  * Адаптер polyfaced.com — Kling 2.1 (видео) + фото-режимы.
@@ -282,12 +282,12 @@ export const polyface: ProviderAdapter = {
   },
 };
 
-/** Полная регистрация через temp-mail. */
+/** Полная регистрация: адрес и письма — с temp-mail.org. */
 export async function registerPolyWithMail(
   context: BrowserContext,
   email: string,
   password: string,
-  mailboxToken: string
+  mail: TempMailSession
 ): Promise<void> {
   const page = await context.newPage();
   try {
@@ -308,7 +308,7 @@ export async function registerPolyWithMail(
     await fillAny(page, SELECTORS.passwordInput, password, "поле пароля", 5000);
     await clickAny(page, SELECTORS.submitAuth, "кнопка регистрации", 5000);
 
-    const message = await waitForMessage(mailboxToken, 90);
+    const message = await mail.waitForMessage(150);
     const code = extractCode(message);
     const link = extractLink(message);
 
