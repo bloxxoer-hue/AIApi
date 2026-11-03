@@ -288,7 +288,10 @@ export const h3max: ProviderAdapter = {
         .click({ timeout: 3000 })
         .then(() => true)
         .catch(() => false);
-      if (!picked) await firstVisible(page, SELECTORS.resolutionSelect, 2000)?.click().catch(() => undefined);
+      if (!picked) {
+        const fallback = await firstVisible(page, SELECTORS.resolutionSelect, 2000);
+        await fallback?.click().catch(() => undefined);
+      }
     }
 
     if (params.aspect) {

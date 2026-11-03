@@ -24,10 +24,10 @@ export async function firstVisible(page: Page, selectors: string[], timeoutMs = 
 }
 
 /** Первый селектор, который существует (даже скрытый). */
-export function firstExisting(page: Page, selectors: string[]): Locator | null {
+export async function firstExisting(page: Page, selectors: string[]): Promise<Locator | null> {
   for (const sel of selectors) {
     const loc = page.locator(sel).first();
-    if (loc.count() > 0) return loc;
+    if ((await loc.count()) > 0) return loc;
   }
   return null;
 }

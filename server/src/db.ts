@@ -81,7 +81,7 @@ const q = {
     `INSERT INTO accounts (provider, email, password, storage_path, status, created_at)
      VALUES (?, ?, ?, ?, 'active', ?)`
   ),
-  touchAccount: db.prepare<[number]>(`UPDATE accounts SET last_used_at = ? WHERE id = ?`),
+  touchAccount: db.prepare<[number, number]>(`UPDATE accounts SET last_used_at = ? WHERE id = ?`),
   blockAccount: db.prepare<[number]>(`UPDATE accounts SET status = 'blocked' WHERE id = ?`),
   saveStorage: db.prepare<[string, number]>(`UPDATE accounts SET storage_path = ? WHERE id = ?`),
 
@@ -107,7 +107,7 @@ const q = {
 
 export const store = {
   getActiveAccount(provider: string): AccountRow | null {
-    return q.activeAccount.get(provider) ?? null;
+    return (q.activeAccount.get(provider) as AccountRow | undefined) ?? null;
   },
 
   createAccount(provider: string, email: string, password: string, storagePath: string | null): number {
@@ -140,7 +140,7 @@ export const store = {
   },
 
   getGeneration(id: string): GenerationRow | undefined {
-    return q.getGeneration.get(id);
+    return q.getGeneration.get(id) as GenerationRow | undefined;
   },
 
   updateGeneration(
